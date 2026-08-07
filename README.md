@@ -44,13 +44,16 @@ src/ml/
   tracking/
     mlflow_utils.py            MLflow config + run logging
   artifacts/                  gitignored *.joblib pipelines, regenerated from MLflow tuned runs
-  api/                       FastAPI serving layer — not built yet
+src/api/                    FastAPI serving layer (sibling of src/ml/, not nested under it)
+  main.py                    app + /health, /models, /predict endpoints
+  schemas.py                 Pydantic request/response models (aliased to the raw dataset's column names)
+  model_registry.py          loads all 8 artifacts once at startup; hardcoded test metrics for /models
 tests/                       not built yet
 docker/, k8s/                containerization/orchestration — not built yet
 requirements.txt
 ```
 
-Being upfront about it: `api/`, `tests/`, `docker/`, `k8s/` are scaffolded directories with
+Being upfront about it: `tests/`, `docker/`, `k8s/` are scaffolded directories with
 nothing in them yet — see [Roadmap](#roadmap) for what's actually done.
 
 ## Setup
@@ -209,6 +212,43 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5001
 Note for macOS: port 5000 is often claimed by the AirPlay Receiver, which returns HTTP 403
 and looks like the server "isn't doing anything." Use a different port (as above) or turn
 off AirPlay Receiver in System Settings → General → AirDrop & Handoff.
+
+## Resampling Ablations (SMOTE, Undersampling)
+
+Two separate, limited experiments — not adopted, but run to check the imbalance-handling
+choice empirically rather than assume `class_weight="balanced"` is best just because it's
+simplest. Both use `imbalanced-learn`'s `Pipeline` (a plain sklearn `Pipeline` can't contain
+a resampling step - it doesn't touch `y` or change row counts) on Logistic Regression and
+Random Forest, with `class_weight=None` on the classifier itself (resampling and cost-
+sensitive weighting both correct the same imbalance - stacking them would over-correct).
+
+| model | variant | PR-AUC | precision | recall | F1 |
+|---|---|---|---|---|---|
+| logistic_regression | `class_weight="balanced"` (current) | 0.3801 | 0.206 | 0.769 | 0.325 |
+| logistic_regression | SMOTENC | 0.3327 | 0.280 | 0.544 | 0.370 |
+| logistic_regression | random undersampling (16k of 120k rows) | 0.3793 | 0.204 | 0.773 | 0.323 |
+| random_forest | `class_weight="balanced"` (current) | 0.3440 | 0.424 | 0.376 | 0.399 |
+| random_forest | SMOTENC | 0.3260 | 0.391 | 0.384 | 0.388 |
+| random_forest | random undersampling | 0.3482 | 0.206 | 0.769 | 0.324 |
+
+**SMOTE loses on PR-AUC for both models**, despite winning on F1 for Logistic Regression.
+Oversampling trains the model on an artificially rebalanced 50/50 distribution, which
+shifts where its predicted probabilities are calibrated - that helps the specific operating
+point F1 measures (threshold 0.5) but distorts the overall score ranking PR-AUC measures.
+
+**Undersampling is a near-wash on PR-AUC for both models** (Logistic Regression:
+effectively identical; Random Forest: marginally better, likely noise) — despite
+discarding **87% of the training data** (120k rows down to ~16k). That the model barely
+changes after losing most of the majority class is more evidence for the "information
+ceiling" read of this dataset from the Final Evaluation section: most of the discarded
+majority-class rows were redundant for this decision boundary, not load-bearing. Random
+Forest's precision/recall *profile* does shift heavily toward Logistic Regression's shape
+(0.206/0.769 vs. the balanced-weight version's 0.424/0.376) even though its ranking quality
+barely moves - undersampling changes the natural decision threshold, not just the data size.
+
+**Kept `class_weight`/`scale_pos_weight`/`priors` as the primary imbalance strategy** for
+all 8 models - neither resampling technique beat it on PR-AUC, and both add a source of
+randomness (which rows get kept/synthesized) that cost-sensitive weighting simply doesn't have.
 
 ## Neural Network (PyTorch MLP)
 
@@ -408,6 +448,57 @@ PYTHONPATH=src python -m ml.evaluation.final_evaluation
 `src/ml/artifacts/*.joblib` is gitignored — regenerated from the MLflow-tracked tuned runs,
 not committed (Random Forest's alone is ~34MB).
 
+## API (FastAPI)
+
+`src/api/` — a thin serving layer over the same 8 joblib artifacts from Final Evaluation.
+On theme for a *model comparison* project: rather than hardcoding a single "the" model, the
+caller picks one per request (defaulting to XGBoost, the best by test PR-AUC).
+
+- **`GET /health`** — liveness check, lists which models are loaded.
+- **`GET /models`** — all 8 models with their test-set precision/recall/F1/PR-AUC/accuracy (the same numbers as the Final Evaluation table), so a caller can pick a model deliberately instead of blindly trusting the default.
+- **`POST /predict`** — body is the 10 raw applicant fields (aliased to the exact Kaggle column names, e.g. `"NumberOfTime30-59DaysPastDueNotWorse"`) plus an optional `model_name`. `MonthlyIncome` and `NumberOfDependents` are optional — omitting them exercises the same imputers built for exactly this case back in the Data pipeline section, not a special code path. Each loaded object is the *entire* fitted pipeline (cleaning → features → scaling → model), so the endpoint itself does no feature engineering — it hands the raw request straight to `.predict_proba()`.
+
+Model metrics in `/models` are a hardcoded snapshot from the last `final_evaluation.py` run,
+not a live MLflow query — serving predictions shouldn't depend on the tracking store being
+reachable. Re-copy them from `model_registry.py`'s `TEST_METRICS` if the models are retrained.
+
+Startup loads all 8 artifacts into memory once (~40MB total, dominated by Random Forest's
+300 trees) rather than lazily per-request, trading a slightly slower cold start for
+predictable request latency.
+
+### Running it
+
+```bash
+PYTHONPATH=src uvicorn api.main:app --reload
+
+# interactive docs
+open http://127.0.0.1:8000/docs
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+        "application": {
+          "RevolvingUtilizationOfUnsecuredLines": 0.766,
+          "age": 45,
+          "NumberOfTime30-59DaysPastDueNotWorse": 2,
+          "DebtRatio": 0.803,
+          "MonthlyIncome": 9120,
+          "NumberOfOpenCreditLinesAndLoans": 13,
+          "NumberOfTimes90DaysLate": 0,
+          "NumberRealEstateLoansOrLines": 6,
+          "NumberOfTime60-89DaysPastDueNotWorse": 0,
+          "NumberOfDependents": 2
+        },
+        "model_name": "xgboost"
+      }'
+# {"model_used":"xgboost","probability_of_default":0.8846,"prediction":1}
+```
+
+That request is the first row of `cs-training.csv` verbatim, which really did default
+(`SeriousDlqin2yrs=1`) — the model agrees.
+
 ## Roadmap
 
 - [x] Data loading + stratified split
@@ -418,9 +509,9 @@ not committed (Random Forest's alone is ~34MB).
 - [x] Feature engineering: delinquency aggregate + interaction terms, validated empirically against log-transform and binning alternatives (capping won)
 - [x] Baseline + tuned PyTorch MLP (hand-written training loop, sklearn-compatible wrapper): best untuned baseline of all 8 models (PR-AUC 0.389 — gets feature interactions for free); tuned to 0.392, 3rd overall behind the two tree ensembles. Uncovered and fixed a real segfault from mixing joblib (`n_jobs=-1`) and PyTorch threading on macOS (see Neural Network section)
 - [x] Hyperparameter tuning (Optuna, 8 studies, pruning): XGBoost took over first place (PR-AUC 0.402), Decision Tree closed most of the gap to Random Forest via pruning, L1 confirmed the engineered features are worth keeping. Feature *extraction* (PCA) stays out of scope: ~15 features is low-dimensional, and credit scoring specifically benefits from features staying interpretable
-- [x] SMOTE ablation (separate experiment, not adopted): SMOTENC beats `class_weight="balanced"` on F1 but loses on PR-AUC for both models tested — oversampling shifts the training distribution away from the true one, hurting score ranking even though one fixed threshold (0.5) looks better. Kept `class_weight`/`scale_pos_weight`/`priors` as the primary imbalance strategy
+- [x] Resampling ablations (SMOTE + undersampling, separate experiments, neither adopted): SMOTENC beats `class_weight="balanced"` on F1 but loses on PR-AUC; undersampling ties on PR-AUC despite discarding 87% of training data (more evidence for the "information ceiling" read of this dataset). Kept `class_weight`/`scale_pos_weight`/`priors` as the primary imbalance strategy — see Resampling Ablations section
 - [x] Final test-set evaluation: artifacts saved to `src/ml/artifacts/`, every model scores at or above its CV estimate on the untouched test set (no "optimizer's curse" from 30 Optuna trials per model against the same folds), ranking identical to CV top to bottom
-- [ ] FastAPI serving layer
+- [x] FastAPI serving layer: `/health`, `/models`, `/predict` over the 8 saved artifacts, caller picks the model per request; verified end-to-end with a live server (including validation errors and the missing-income/dependents imputation path)
 - [ ] PostgreSQL + SQLAlchemy + Alembic
 - [ ] Docker/Podman, Kubernetes manifests
 - [ ] GitHub Actions CI/CD
