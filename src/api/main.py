@@ -56,3 +56,15 @@ def predict(request: PredictionRequest) -> PredictionResponse:
         probability_of_default=probability_of_default,
         prediction=int(probability_of_default >= 0.5),
     )
+
+
+if __name__ == "__main__":
+    # Local dev convenience: `PYTHONPATH=src python -m api.main`, matching the
+    # `python -m ml.xxx.yyy` pattern used by every other entry point in this project,
+    # instead of a separately-remembered uvicorn CLI invocation. reload=True needs the
+    # "module:app" string form (not the `app` object) - uvicorn re-imports it fresh in a
+    # subprocess on every file change. Production (Docker/K8s) will invoke uvicorn
+    # directly with different flags (host 0.0.0.0, no reload), bypassing this block.
+    import uvicorn
+
+    uvicorn.run("api.main:app", host="127.0.0.1", port=8000, reload=True)

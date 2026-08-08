@@ -65,7 +65,15 @@ EOL — deliberately not used for this project).
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e . --no-deps
 ```
+
+The last line installs this repo itself in editable mode (`pyproject.toml`, src-layout:
+`ml` and `api` live under `src/`) so `import ml` / `import api` work from anywhere, in any
+shell, without a `PYTHONPATH=src` prefix on every command — the standard fix, not a
+workaround. `--no-deps` because dependencies are already pinned and installed via
+`requirements.txt` above; `pyproject.toml` intentionally lists none, so there's one source
+of truth for versions, not two files that can drift apart.
 
 Jupyter: a dedicated kernel ("Give Me Some Credit (.venv)") is registered and set as the
 notebook's default, so `notebooks/01-dataset-analysis.ipynb` should pick up `.venv`
@@ -203,7 +211,7 @@ the majority class and would have picked the wrong "best" model here.
 
 ```bash
 source .venv/bin/activate
-PYTHONPATH=src python -m ml.training.train_baseline
+python -m ml.training.train_baseline
 
 # inspect runs in the MLflow UI
 mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5001
@@ -381,7 +389,7 @@ place.
 ### Running it
 
 ```bash
-PYTHONPATH=src python -m ml.training.tune
+python -m ml.training.tune
 
 # inspect studies (per-trial history, parameter importance) in Optuna's own dashboard
 optuna-dashboard sqlite:///optuna.db
@@ -442,7 +450,7 @@ differently scaled, they disagree on ranking outright.
 ### Running it
 
 ```bash
-PYTHONPATH=src python -m ml.evaluation.final_evaluation
+python -m ml.evaluation.final_evaluation
 ```
 
 `src/ml/artifacts/*.joblib` is gitignored — regenerated from the MLflow-tracked tuned runs,
@@ -469,11 +477,17 @@ predictable request latency.
 ### Running it
 
 ```bash
-PYTHONPATH=src uvicorn api.main:app --reload
+python -m api.main
 
 # interactive docs
 open http://127.0.0.1:8000/docs
 ```
+
+Matches the `python -m ml.xxx.yyy` convention every other entry point in this project uses,
+instead of a separately-remembered `uvicorn app:module --reload` invocation. `main.py`'s
+`if __name__ == "__main__":` block calls `uvicorn.run("api.main:app", ..., reload=True)`
+itself - the direct `uvicorn api.main:app --reload` CLI form still works identically if
+you prefer it.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
