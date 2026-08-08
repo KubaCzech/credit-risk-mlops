@@ -9,3 +9,10 @@ requires-python = ">=3.12"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Non-.py files are dropped by a plain `pip install .` unless declared here - this bit both
+# db/seed_data.json and the trained model artifacts (found the hard way, inside the Docker
+# build - editable installs never hit this, since they just point back at the source tree).
+db = ["seed_data.json"]
+ml = ["artifacts/*.joblib"]

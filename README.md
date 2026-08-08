@@ -51,18 +51,25 @@ src/api/                    FastAPI serving layer (sibling of src/ml/, not neste
 src/db/                     SQLAlchemy layer (also a sibling of src/ml/)
   models.py                  ORM models: Model (lookup table), Prediction (audit log, FK to Model)
   session.py                 engine + session factory + get_db() FastAPI dependency
-  seed_models.py              populates the models table from MLflow's tuned runs
+  seed_models.py              populates the models table from the static snapshot below
+  seed_data.json               committed snapshot of tuned metrics - no MLflow dependency at seed time
+  export_seed_data.py          local-dev only: regenerates seed_data.json from MLflow after retuning
   config.py                   DATABASE_URL (env var, local-dev default included)
 alembic/                    migrations (env.py reads db/models.py's metadata + db/config.py's URL)
 alembic.ini
+docker/
+  Dockerfile                 builds the API image (CPU-only torch, package layer cached separately)
+  entrypoint.sh                migrate + seed + serve, every container start
+docker-compose.yml          API + Postgres, one Compose-managed network (see Docker below)
+.dockerignore
 tests/                       not built yet
-docker/, k8s/                containerization/orchestration — not built yet
+k8s/                        orchestration - not built yet
 requirements.txt
 pyproject.toml               src-layout packaging (`pip install -e .` - see Setup)
 ```
 
-Being upfront about it: `tests/`, `docker/`, `k8s/` are scaffolded directories with
-nothing in them yet — see [Roadmap](#roadmap) for what's actually done.
+Being upfront about it: `tests/` and `k8s/` are scaffolded directories with nothing in them
+yet — see [Roadmap](#roadmap) for what's actually done.
 
 ## Setup
 
@@ -527,9 +534,11 @@ populate it yet.
 
 **`models`** — one row per tuned model: the same precision/recall/F1/PR-AUC/accuracy as the
 Final Evaluation table, plus the `mlflow_run_id` that produced them. A lookup table, not
-written to by the API - seeded once by `db/seed_models.py`, which reads straight from
-MLflow so this table and the Final Evaluation numbers can't drift apart. This replaced a
-`TEST_METRICS` dict that used to be hardcoded in `api/model_registry.py`.
+written to by the API - seeded by `db/seed_models.py` from a committed static snapshot
+(`db/seed_data.json`), not a live MLflow query (that was the original design; it broke
+inside a container, which has no access to the host's `mlflow.db` - see Docker below).
+`db/export_seed_data.py` regenerates the snapshot from MLflow after retuning, locally. This
+replaced a `TEST_METRICS` dict that used to be hardcoded in `api/model_registry.py`.
 
 **`predictions`** — one row per `POST /predict` call: `model_id` (FK → `models.id`), every
 input feature as its own column (not a JSON blob — real SQL aggregation over the audit log
@@ -575,6 +584,92 @@ container's own filesystem layer. The named volume above is what survives that: 
 deleting the container entirely and recreating it against the same volume, data intact.
 Without `-v`, `docker rm` would silently wipe everything.
 
+(The manual `docker run` above is what to use for local dev without the API, e.g. to run
+`db/seed_models.py` from your own shell. The full stack - API included - now runs through
+`docker compose`, below, which manages its own Postgres container and volume instead.)
+
+## Docker
+
+`docker-compose.yml` (project root) + `docker/Dockerfile` + `docker/entrypoint.sh` - two
+services, API and Postgres, in one Compose-managed network.
+
+**Why the `DATABASE_URL` changes here and nowhere else**: `db/config.py`'s default
+(`@localhost:5432`) only ever worked because the API process ran directly on the host,
+where Docker had port-forwarded Postgres to `localhost`. Inside Compose, the API is *also*
+a container - `localhost` from its point of view is itself, not the `db` container next to
+it. Compose gives every service a DNS name matching its key in the YAML, so the fix is
+one environment variable override (`DATABASE_URL: ...@db:5432/...`) in `docker-compose.yml`,
+not a code change - exactly what parameterizing it as an env var was for.
+
+**`docker/entrypoint.sh`** runs on every container start, not just the first: `alembic
+upgrade head` (idempotent - tracked by the `alembic_version` table) then `python -m
+db.seed_models` (idempotent - upserts by name) then `exec uvicorn ... --host 0.0.0.0`. The
+whole stack self-heals its schema and reference data on every `docker compose up`; no
+manual migration step. `--host 0.0.0.0` (not the dev default `127.0.0.1`) matters inside a
+container - `127.0.0.1` there means "only reachable from inside this container," which
+would make the port mapping to the host a no-op.
+
+**Image contents**: built from the full `requirements.txt`, including packages the API
+never imports at runtime (Jupyter, matplotlib, torch's training-only paths) - simpler than
+maintaining a second, leaner requirements file, at the cost of a larger image. Noted as a
+possible future optimization, not fixed now (see `TODO.md`).
+
+**Layer caching**: `requirements.txt` is copied and installed *before* the application code
+(`COPY src/`). Docker caches each layer keyed on its inputs - editing `src/api/main.py`
+therefore doesn't invalidate the multi-minute torch/xgboost/mlflow install step, only the
+fast steps after it.
+
+### Three real bugs the build surfaced, not just theory
+
+Building an image from a clean `requirements.txt` is a genuine clean-room test - it caught
+three things `pip install`-ing packages one at a time into a long-lived local `.venv` had
+silently let slide.
+
+1. **`pandas==3.0.5` in `requirements.txt` didn't match what was actually installed
+   locally (`2.3.3`).** Some earlier `pip install` in this project's history quietly
+   resolved pandas down to satisfy mlflow's `pandas<3` constraint, and `requirements.txt`
+   was never updated to match - a `.venv` accumulates state silently across many separate
+   installs; a fresh `pip install -r requirements.txt` in a container forces one
+   simultaneous resolution across everything, and immediately refused a combination that
+   had been quietly working (`ResolutionImpossible`). Fixed by re-pinning to what was
+   actually running.
+
+2. **PyPI's default Linux `torch` wheel pulls ~1.6GB of unconditional `nvidia-*`/`triton`
+   CUDA runtime packages** - irrelevant here (CPU-only by design, see Neural Network
+   above), and large enough that it looked like a flaky network timeout the first two times
+   the build failed, rather than what it actually was: a genuinely enormous, pointless
+   download. Never showed up locally because Apple Silicon has no CUDA build to begin with,
+   so the macOS wheel never declares those dependencies. Fixed with
+   `--extra-index-url https://download.pytorch.org/whl/cpu` in the Dockerfile.
+
+3. **`db/seed_models.py` originally queried MLflow live** - fine locally, where
+   `mlflow.db` sits right there on disk, but inside a fresh container there's no access to
+   the host's tracking store at all, so it created an empty one and found zero tuned runs.
+   Fixed by decoupling seeding from a live MLflow connection entirely: `db/seed_data.json`
+   is a static, committed snapshot of the tuned metrics (regenerated locally via
+   `python -m db.export_seed_data` after retuning), and `seed_models.py` just reads that
+   file - works identically locally and in a container, no MLflow dependency at request
+   time. Surfaced a second, smaller version of the same class of bug right behind it: a
+   non-editable `pip install .` only copies `.py` files into `site-packages` by default,
+   silently dropping `seed_data.json` and the `*.joblib` model artifacts until both were
+   declared under `[tool.setuptools.package-data]` in `pyproject.toml`. Editable installs
+   (`pip install -e .`, used everywhere else in this project) never hit this, since they
+   just point back at the source tree instead of copying files - another gap invisible
+   until the exact packaging mode used in the container was actually exercised.
+
+### Running it
+
+```bash
+docker compose up --build
+# API:      http://127.0.0.1:8000/docs
+# Postgres: localhost:5432 (same credentials as the manual setup above)
+```
+
+Verified end-to-end against the real containers, not just assumed from the config: both
+services healthy, `/health` and `/models` responding, a real `/predict` call scored and
+its row visible in `predictions` via `docker compose exec db psql ...` with the `models`
+join resolving correctly.
+
 ## Roadmap
 
 - [x] Data loading + stratified split
@@ -589,6 +684,7 @@ Without `-v`, `docker rm` would silently wipe everything.
 - [x] Final test-set evaluation: artifacts saved to `src/ml/artifacts/`, every model scores at or above its CV estimate on the untouched test set (no "optimizer's curse" from 30 Optuna trials per model against the same folds), ranking identical to CV top to bottom
 - [x] FastAPI serving layer: `/health`, `/models`, `/predict` over the 8 saved artifacts, caller picks the model per request; verified end-to-end with a live server (including validation errors and the missing-income/dependents imputation path)
 - [x] PostgreSQL + SQLAlchemy + Alembic: `models` (lookup, seeded from MLflow) + `predictions` (audit log, FK to `models`); `/predict` writes to it, `/models` reads from it; verified end-to-end against a live container (migration, seed, insert, join query)
-- [ ] Docker/Podman, Kubernetes manifests
+- [x] Docker: `docker-compose.yml` (API + Postgres), verified end-to-end against real containers. Caught 3 real bugs a long-lived local `.venv` had let slide (stale `pandas` pin, ~1.6GB of unneeded CUDA deps on Linux, MLflow-dependent seeding breaking with no host tracking store) - see Docker section. Podman: not tested, but the Dockerfile/Compose file are standard OCI, expected to work unchanged
+- [ ] Kubernetes manifests
 - [ ] GitHub Actions CI/CD
 - [ ] Tests

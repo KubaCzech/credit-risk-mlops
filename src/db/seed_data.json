@@ -1,0 +1,74 @@
+[
+  {
+    "name": "mlp",
+    "test_precision": 0.2099946836788942,
+    "test_recall": 0.7880299251870324,
+    "test_f1": 0.33161926749921294,
+    "test_pr_auc": 0.39751523824056423,
+    "test_accuracy": 0.7877,
+    "mlflow_run_id": "18a9c11d1afb476fab05b999722e4c08"
+  },
+  {
+    "name": "rbf_svm",
+    "test_precision": 0.22544974418220828,
+    "test_recall": 0.6812967581047381,
+    "test_f1": 0.33878968253968256,
+    "test_pr_auc": 0.3692646193799146,
+    "test_accuracy": 0.8222666666666667,
+    "mlflow_run_id": "a9de416865b9409ca42c8d197fd8d012"
+  },
+  {
+    "name": "xgboost",
+    "test_precision": 0.21699669966996699,
+    "test_recall": 0.7870324189526184,
+    "test_f1": 0.34019618411124286,
+    "test_pr_auc": 0.403849033476967,
+    "test_accuracy": 0.7959666666666667,
+    "mlflow_run_id": "6d4ee048e09c4010bce7635596bc0ad5"
+  },
+  {
+    "name": "naive_bayes",
+    "test_precision": 0.3440656565656566,
+    "test_recall": 0.543640897755611,
+    "test_f1": 0.42141890585733616,
+    "test_pr_auc": 0.35535406545472886,
+    "test_accuracy": 0.9002333333333333,
+    "mlflow_run_id": "8ab1415ac79a4f18ada3835f5825881c"
+  },
+  {
+    "name": "decision_tree",
+    "test_precision": 0.20599842146803474,
+    "test_recall": 0.7810473815461346,
+    "test_f1": 0.32601228271052357,
+    "test_pr_auc": 0.3704963982617203,
+    "test_accuracy": 0.7841666666666667,
+    "mlflow_run_id": "92d1f1087f0c441ea7449cca77826b28"
+  },
+  {
+    "name": "random_forest",
+    "test_precision": 0.23249730727804277,
+    "test_recall": 0.7536159600997506,
+    "test_f1": 0.35536218250235185,
+    "test_pr_auc": 0.40050524431096796,
+    "test_accuracy": 0.8172666666666667,
+    "mlflow_run_id": "017de28c6fc04ea8ae1ec1ccf7a90a00"
+  },
+  {
+    "name": "linear_svm",
+    "test_precision": 0.20163348647269014,
+    "test_recall": 0.7880299251870324,
+    "test_f1": 0.3211055787013515,
+    "test_pr_auc": 0.387737329458372,
+    "test_accuracy": 0.7773,
+    "mlflow_run_id": "d092516fdd924fb7b2116abb5814c4bf"
+  },
+  {
+    "name": "logistic_regression",
+    "test_precision": 0.21468298109010012,
+    "test_recall": 0.7700748129675811,
+    "test_f1": 0.3357616614113298,
+    "test_pr_auc": 0.3932730769273755,
+    "test_accuracy": 0.7963666666666667,
+    "mlflow_run_id": "f3ca3656e228463c85bdc8d94a13f140"
+  }
+]

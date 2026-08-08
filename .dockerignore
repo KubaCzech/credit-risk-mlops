@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.ipynb_checkpoints/
+notebooks/
+data/
+mlruns/
+mlartifacts/
+mlflow.db
+optuna.db
+.pytest_cache/
+.DS_Store
+.claude/
+
+# NOTE: src/ml/artifacts/*.joblib is intentionally NOT excluded here, unlike in .gitignore -
+# the API image needs the trained models baked in to serve predictions.
