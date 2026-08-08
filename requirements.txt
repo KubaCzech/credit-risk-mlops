@@ -17,3 +17,6 @@ optuna-dashboard==0.20.0
 torch==2.13.0
 fastapi==0.141.1
 uvicorn==0.52.1
+sqlalchemy==2.0.51
+alembic==1.19.0
+psycopg[binary]==3.3.4

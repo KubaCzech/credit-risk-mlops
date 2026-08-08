@@ -45,12 +45,20 @@ src/ml/
     mlflow_utils.py            MLflow config + run logging
   artifacts/                  gitignored *.joblib pipelines, regenerated from MLflow tuned runs
 src/api/                    FastAPI serving layer (sibling of src/ml/, not nested under it)
-  main.py                    app + /health, /models, /predict endpoints
+  main.py                    app + /health, /models, /predict endpoints; logs every prediction to the DB
   schemas.py                 Pydantic request/response models (aliased to the raw dataset's column names)
-  model_registry.py          loads all 8 artifacts once at startup; hardcoded test metrics for /models
+  model_registry.py          loads all 8 artifacts + their DB metadata once at startup
+src/db/                     SQLAlchemy layer (also a sibling of src/ml/)
+  models.py                  ORM models: Model (lookup table), Prediction (audit log, FK to Model)
+  session.py                 engine + session factory + get_db() FastAPI dependency
+  seed_models.py              populates the models table from MLflow's tuned runs
+  config.py                   DATABASE_URL (env var, local-dev default included)
+alembic/                    migrations (env.py reads db/models.py's metadata + db/config.py's URL)
+alembic.ini
 tests/                       not built yet
 docker/, k8s/                containerization/orchestration — not built yet
 requirements.txt
+pyproject.toml               src-layout packaging (`pip install -e .` - see Setup)
 ```
 
 Being upfront about it: `tests/`, `docker/`, `k8s/` are scaffolded directories with
@@ -463,16 +471,13 @@ On theme for a *model comparison* project: rather than hardcoding a single "the"
 caller picks one per request (defaulting to XGBoost, the best by test PR-AUC).
 
 - **`GET /health`** — liveness check, lists which models are loaded.
-- **`GET /models`** — all 8 models with their test-set precision/recall/F1/PR-AUC/accuracy (the same numbers as the Final Evaluation table), so a caller can pick a model deliberately instead of blindly trusting the default.
-- **`POST /predict`** — body is the 10 raw applicant fields (aliased to the exact Kaggle column names, e.g. `"NumberOfTime30-59DaysPastDueNotWorse"`) plus an optional `model_name`. `MonthlyIncome` and `NumberOfDependents` are optional — omitting them exercises the same imputers built for exactly this case back in the Data pipeline section, not a special code path. Each loaded object is the *entire* fitted pipeline (cleaning → features → scaling → model), so the endpoint itself does no feature engineering — it hands the raw request straight to `.predict_proba()`.
-
-Model metrics in `/models` are a hardcoded snapshot from the last `final_evaluation.py` run,
-not a live MLflow query — serving predictions shouldn't depend on the tracking store being
-reachable. Re-copy them from `model_registry.py`'s `TEST_METRICS` if the models are retrained.
+- **`GET /models`** — all 8 models with their test-set precision/recall/F1/PR-AUC/accuracy (the same numbers as the Final Evaluation table), read from the `models` table (see Database below) so a caller can pick a model deliberately instead of blindly trusting the default.
+- **`POST /predict`** — body is the 10 raw applicant fields (aliased to the exact Kaggle column names, e.g. `"NumberOfTime30-59DaysPastDueNotWorse"`) plus an optional `model_name`. `MonthlyIncome` and `NumberOfDependents` are optional — omitting them exercises the same imputers built for exactly this case back in the Data pipeline section, not a special code path. Each loaded object is the *entire* fitted pipeline (cleaning → features → scaling → model), so the endpoint itself does no feature engineering — it hands the raw request straight to `.predict_proba()`. Every call is logged to the `predictions` table before the response is returned.
 
 Startup loads all 8 artifacts into memory once (~40MB total, dominated by Random Forest's
 300 trees) rather than lazily per-request, trading a slightly slower cold start for
-predictable request latency.
+predictable request latency. Model metadata (the numbers in `/models`) is loaded once at
+startup too, from the database, not re-queried per request.
 
 ### Running it
 
@@ -513,6 +518,63 @@ curl -X POST http://127.0.0.1:8000/predict \
 That request is the first row of `cs-training.csv` verbatim, which really did default
 (`SeriousDlqin2yrs=1`) — the model agrees.
 
+## Database
+
+PostgreSQL + SQLAlchemy 2.0 (typed `Mapped[...]` declarative style) + Alembic. Two tables,
+deliberately not more — see `TODO.md` for the extension (an `outcomes` table for drift
+monitoring) that was considered and left out because there's no real feedback source to
+populate it yet.
+
+**`models`** — one row per tuned model: the same precision/recall/F1/PR-AUC/accuracy as the
+Final Evaluation table, plus the `mlflow_run_id` that produced them. A lookup table, not
+written to by the API - seeded once by `db/seed_models.py`, which reads straight from
+MLflow so this table and the Final Evaluation numbers can't drift apart. This replaced a
+`TEST_METRICS` dict that used to be hardcoded in `api/model_registry.py`.
+
+**`predictions`** — one row per `POST /predict` call: `model_id` (FK → `models.id`), every
+input feature as its own column (not a JSON blob — real SQL aggregation over the audit log
+is the point, e.g. `AVG(probability_of_default) GROUP BY ...`, which a JSON column would
+make much more awkward), the returned probability, and the prediction. `monthly_income` and
+`number_of_dependents` are nullable, matching the optional API fields.
+
+```
+models                          predictions
+├─ id (PK)                      ├─ id (PK)
+├─ name (unique)          ┌────>├─ model_id (FK)
+├─ test_precision         │     ├─ created_at (indexed)
+├─ test_recall            │     ├─ <10 raw feature columns>
+├─ test_f1                │     ├─ probability_of_default
+├─ test_pr_auc            │     └─ prediction
+├─ test_accuracy          │
+├─ mlflow_run_id          │
+└─ created_at ─────────────┘
+```
+
+### Running it
+
+```bash
+# local dev Postgres (one container, not the full docker-compose stack yet - see Roadmap)
+docker volume create credit-risk-pgdata   # named volume - survives `docker rm`, unlike the
+                                            # container's own writable layer
+docker run -d --name credit-risk-postgres \
+  -e POSTGRES_USER=credit_risk -e POSTGRES_PASSWORD=credit_risk -e POSTGRES_DB=credit_risk \
+  -p 5432:5432 -v credit-risk-pgdata:/var/lib/postgresql/data postgres:16
+
+alembic upgrade head        # create the tables (idempotent - tracked in the alembic_version table)
+python -m db.seed_models    # populate `models` from MLflow's tuned runs
+```
+
+`DATABASE_URL` (env var, default `postgresql+psycopg://credit_risk:credit_risk@localhost:5432/credit_risk`
+in `db/config.py`) is the one place the connection string lives — `alembic/env.py` reads it
+from there instead of duplicating it in `alembic.ini`.
+
+**Persistence, precisely**: restarting the FastAPI app never touches the database - it just
+opens a new connection to whatever's already there. Stopping/starting the *same* container
+(`docker stop` / `docker start`) also keeps the data - only `docker rm` destroys a
+container's own filesystem layer. The named volume above is what survives that: verified by
+deleting the container entirely and recreating it against the same volume, data intact.
+Without `-v`, `docker rm` would silently wipe everything.
+
 ## Roadmap
 
 - [x] Data loading + stratified split
@@ -526,7 +588,7 @@ That request is the first row of `cs-training.csv` verbatim, which really did de
 - [x] Resampling ablations (SMOTE + undersampling, separate experiments, neither adopted): SMOTENC beats `class_weight="balanced"` on F1 but loses on PR-AUC; undersampling ties on PR-AUC despite discarding 87% of training data (more evidence for the "information ceiling" read of this dataset). Kept `class_weight`/`scale_pos_weight`/`priors` as the primary imbalance strategy — see Resampling Ablations section
 - [x] Final test-set evaluation: artifacts saved to `src/ml/artifacts/`, every model scores at or above its CV estimate on the untouched test set (no "optimizer's curse" from 30 Optuna trials per model against the same folds), ranking identical to CV top to bottom
 - [x] FastAPI serving layer: `/health`, `/models`, `/predict` over the 8 saved artifacts, caller picks the model per request; verified end-to-end with a live server (including validation errors and the missing-income/dependents imputation path)
-- [ ] PostgreSQL + SQLAlchemy + Alembic
+- [x] PostgreSQL + SQLAlchemy + Alembic: `models` (lookup, seeded from MLflow) + `predictions` (audit log, FK to `models`); `/predict` writes to it, `/models` reads from it; verified end-to-end against a live container (migration, seed, insert, join query)
 - [ ] Docker/Podman, Kubernetes manifests
 - [ ] GitHub Actions CI/CD
 - [ ] Tests
