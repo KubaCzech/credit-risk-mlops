@@ -1,6 +1,8 @@
 .venv/
+.vscode/
 __pycache__/
 *.pyc
+*.egg-info/
 .git/
 .ipynb_checkpoints/
 notebooks/
@@ -13,5 +15,7 @@ optuna.db
 .DS_Store
 .claude/
 
-# NOTE: src/ml/artifacts/*.joblib is intentionally NOT excluded here, unlike in .gitignore -
-# the API image needs the trained models baked in to serve predictions.
+# NOTE: src/ml/artifacts/*.joblib is intentionally NOT excluded here - the API image needs
+# the trained models to serve predictions. Committed to git too now, as of CI (see README,
+# Tests/CI-CD sections) - integration tests need real artifacts on a fresh checkout, and
+# retraining on every CI run was never an option (would touch the test set repeatedly).

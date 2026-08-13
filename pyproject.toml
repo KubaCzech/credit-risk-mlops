@@ -15,4 +15,40 @@ where = ["src"]
 # db/seed_data.json and the trained model artifacts (found the hard way, inside the Docker
 # build - editable installs never hit this, since they just point back at the source tree).
 db = ["seed_data.json"]
-ml = ["artifacts/*.joblib"]
+ml = ["artifacts/*.joblib", "artifacts/*.csv", "artifacts/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+# 120, not the 88 default - this codebase's docstrings routinely explain *why*, not just
+# what, and forcing those onto more, shorter lines would hurt readability for no real gain.
+line-length = 120
+target-version = "py312"
+src = ["src"]
+# notebooks/ is exploratory EDA, not maintained production code - linting/formatting it
+# the same way as src/ would churn cell diffs for no real benefit.
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports/vars, undefined names)
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade (modern syntax for the pinned 3.12 target)
+    "B",   # flake8-bugbear (common real bugs: mutable defaults, broad excepts, etc.)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# B008 ("no function calls in argument defaults") is a real footgun for mutable defaults,
+# but `Depends(...)` in a default is FastAPI's own dependency-injection mechanism, not the
+# bug that rule exists to catch.
+"src/api/main.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+# Third-party stubs for sklearn/torch/xgboost/shap are incomplete or absent - ignoring
+# missing imports catches real bugs in *this* project's code without drowning in noise
+# from libraries this project doesn't control.
+ignore_missing_imports = true
