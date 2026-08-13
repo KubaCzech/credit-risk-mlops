@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -23,7 +23,7 @@ class Model(Base):
     test_pr_auc: Mapped[float] = mapped_column(Float, nullable=False)
     test_accuracy: Mapped[float] = mapped_column(Float, nullable=False)
     mlflow_run_id: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     predictions: Mapped[list["Prediction"]] = relationship(back_populates="model")
 
@@ -37,9 +37,7 @@ class Prediction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     model_id: Mapped[int] = mapped_column(ForeignKey("models.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     revolving_utilization_of_unsecured_lines: Mapped[float] = mapped_column(Float, nullable=False)
     age: Mapped[int] = mapped_column(Integer, nullable=False)

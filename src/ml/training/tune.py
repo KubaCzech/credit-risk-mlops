@@ -130,7 +130,16 @@ def build_rbf_svm_trial_pipeline(params: dict, random_state: int = RANDOM_STATE)
         [
             *cleaning_and_feature_steps(),
             ("scaler", StandardScaler()),
-            ("clf", SVC(kernel="rbf", C=params["C"], gamma=params["gamma"], class_weight="balanced", random_state=random_state)),
+            (
+                "clf",
+                SVC(
+                    kernel="rbf",
+                    C=params["C"],
+                    gamma=params["gamma"],
+                    class_weight="balanced",
+                    random_state=random_state,
+                ),
+            ),
         ]
     )
 
@@ -333,8 +342,17 @@ def run_tuning_experiments(model_names: list[str] | None = None) -> pd.DataFrame
         )
 
         n_pruned = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.PRUNED)
-        rows.append({"model": model_name, "n_trials": n_trials, "n_pruned": n_pruned, "elapsed_s": round(elapsed, 1), **cv_summary})
-        print(f"{model_name}: pr_auc={cv_summary['pr_auc_mean']:.4f} ({n_trials} trials, {n_pruned} pruned, {elapsed:.0f}s)")
+        rows.append(
+            {
+                "model": model_name,
+                "n_trials": n_trials,
+                "n_pruned": n_pruned,
+                "elapsed_s": round(elapsed, 1),
+                **cv_summary,
+            }
+        )
+        pr_auc = cv_summary["pr_auc_mean"]
+        print(f"{model_name}: pr_auc={pr_auc:.4f} ({n_trials} trials, {n_pruned} pruned, {elapsed:.0f}s)")
 
     results = pd.DataFrame(rows).set_index("model").sort_values("pr_auc_mean", ascending=False)
     return results

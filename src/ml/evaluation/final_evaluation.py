@@ -1,3 +1,5 @@
+from typing import cast
+
 import joblib
 import mlflow
 import mlflow.sklearn
@@ -6,7 +8,9 @@ from sklearn.metrics import accuracy_score, average_precision_score, f1_score, p
 
 from ..config import ARTIFACTS_DIR
 from ..data.loader import load_and_split, split_X_y
+from ..explainability import save_shap_background
 from ..models.mlp import TorchMLPClassifier  # noqa: F401 - needed to unpickle MLP pipelines
+from ..monitoring import save_reference_distributions
 from ..tracking.mlflow_utils import configure_mlflow
 
 MODEL_NAMES = [
@@ -22,7 +26,15 @@ MODEL_NAMES = [
 
 
 def _find_tuned_run(model_name: str) -> pd.Series:
-    runs = mlflow.search_runs(filter_string=f"tags.model_name = '{model_name}' and tags.stage = 'tuned'")
+    # output_format="pandas" is mlflow's own default, made explicit here because
+    # search_runs()'s other output_format returns a plain list, not a DataFrame - the
+    # .iloc[0] below only works because of this.
+    runs = cast(
+        pd.DataFrame,
+        mlflow.search_runs(
+            filter_string=f"tags.model_name = '{model_name}' and tags.stage = 'tuned'", output_format="pandas"
+        ),
+    )
     if len(runs) == 0:
         raise ValueError(f"No tuned MLflow run found for '{model_name}' - run tune.py first.")
     return runs.iloc[0]
@@ -94,6 +106,16 @@ def evaluate_on_test(model_names: list[str] = MODEL_NAMES) -> pd.DataFrame:
 
 if __name__ == "__main__":
     save_tuned_artifacts()
+
+    train_df, _test_df = load_and_split()
+    X_train, _y_train = split_X_y(train_df)
+    save_shap_background(X_train)
+    print("SHAP background sample saved (from train only)")
+
+    pipelines = {name: joblib.load(ARTIFACTS_DIR / f"{name}.joblib") for name in MODEL_NAMES}
+    save_reference_distributions(X_train, pipelines)
+    print("Monitoring reference distributions saved (from train only)")
+
     print()
     results_df = evaluate_on_test()
     pd.set_option("display.width", 140)

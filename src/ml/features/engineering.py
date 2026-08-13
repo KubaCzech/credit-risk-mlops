@@ -16,7 +16,7 @@ class DelinquencyAggregator(BaseEstimator, TransformerMixin):
     carry overlapping but distinct signal, so the sum is added alongside them rather than
     replacing them."""
 
-    def __init__(self, cols: list[str] = None):
+    def __init__(self, cols: list[str] | None = None):
         self.cols = cols if cols is not None else DELINQUENCY_COLS
 
     def fit(self, X: pd.DataFrame, y=None) -> "DelinquencyAggregator":
@@ -42,9 +42,7 @@ class InteractionFeatures(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
-        X["utilization_x_delinquency"] = (
-            X["RevolvingUtilizationOfUnsecuredLines"] * X["total_delinquency"]
-        )
+        X["utilization_x_delinquency"] = X["RevolvingUtilizationOfUnsecuredLines"] * X["total_delinquency"]
         X["income_per_dependent"] = X["MonthlyIncome"] / (X["NumberOfDependents"] + 1)
         return X
 

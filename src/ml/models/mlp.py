@@ -98,7 +98,7 @@ class TorchMLPClassifier(ClassifierMixin, BaseEstimator):
         n_train = X_train_t.shape[0]
         generator = torch.Generator().manual_seed(self.random_state)
 
-        for epoch in range(self.max_epochs):
+        for epoch in range(self.max_epochs):  # noqa: B007 - used after the loop, below
             self.model_.train()
             permutation = torch.randperm(n_train, generator=generator)
             for start in range(0, n_train, self.batch_size):
@@ -125,6 +125,7 @@ class TorchMLPClassifier(ClassifierMixin, BaseEstimator):
                 if epochs_without_improvement >= self.patience:
                     break
 
+        assert best_state is not None, "max_epochs must be >= 1 - at least one epoch has to run to have a best_state"
         self.model_.load_state_dict(best_state)
         self.n_epochs_trained_ = epoch + 1
         return self

@@ -1,9 +1,12 @@
 import json
+from typing import cast
 
 import mlflow
+import pandas as pd
 
 from ml.evaluation.final_evaluation import MODEL_NAMES
 from ml.tracking.mlflow_utils import configure_mlflow
+
 from .seed_models import SEED_DATA_PATH
 
 
@@ -14,7 +17,12 @@ def export_seed_data() -> None:
 
     data = []
     for name in MODEL_NAMES:
-        runs = mlflow.search_runs(filter_string=f"tags.model_name = '{name}' and tags.stage = 'tuned'")
+        runs = cast(
+            pd.DataFrame,
+            mlflow.search_runs(
+                filter_string=f"tags.model_name = '{name}' and tags.stage = 'tuned'", output_format="pandas"
+            ),
+        )
         if len(runs) == 0:
             raise ValueError(f"No tuned MLflow run found for '{name}' - run tune.py and final_evaluation.py first.")
         run = runs.iloc[0]

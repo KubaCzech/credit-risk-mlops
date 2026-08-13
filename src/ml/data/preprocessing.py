@@ -15,7 +15,7 @@ MIN_PLAUSIBLE_AGE = 18
 class DelinquencySentinelHandler(BaseEstimator, TransformerMixin):
     """96/98 in the delinquency columns are error codes, not counts: flag as missing then impute."""
 
-    def __init__(self, cols: list[str] = None, sentinel_values: tuple = SENTINEL_VALUES):
+    def __init__(self, cols: list[str] | None = None, sentinel_values: tuple = SENTINEL_VALUES):
         self.cols = cols if cols is not None else DELINQUENCY_COLS
         self.sentinel_values = sentinel_values
 
@@ -93,7 +93,7 @@ class OutlierCapper(BaseEstimator, TransformerMixin):
     well-behaved bulk of each distribution on its original, apparently already close to
     linear-in-log-odds, scale - log/binning reshape that bulk too and lose that."""
 
-    def __init__(self, cols: list[str] = None, upper_quantile: float = 0.99):
+    def __init__(self, cols: list[str] | None = None, upper_quantile: float = 0.99):
         self.cols = cols if cols is not None else OUTLIER_COLS
         self.upper_quantile = upper_quantile
 
