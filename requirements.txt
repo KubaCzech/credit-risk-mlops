@@ -10,11 +10,14 @@ nbconvert==7.17.1
 nbformat==5.10.4
 
 pytest==9.1.1
+httpx==0.28.1
 mlflow==3.15.1
 xgboost==3.4.0
 optuna==4.9.0
 optuna-dashboard==0.20.0
 torch==2.13.0
+shap==0.52.0
+prometheus-fastapi-instrumentator==8.1.0
 fastapi==0.141.1
 uvicorn==0.52.1
 sqlalchemy==2.0.51
